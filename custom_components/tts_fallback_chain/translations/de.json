@@ -1,0 +1,130 @@
+{
+  "title": "TTS Fallback-Kette",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Neue TTS Fallback-Kette",
+        "description": "Die Kette stellt eine eigene TTS-Entität bereit. Sie fragt die TTS-Dienste der Reihe nach an und nimmt den ersten, der funktioniert. Im nächsten Schritt legst du die Stufen fest.",
+        "data": {
+          "name": "Name",
+          "language": "Standardsprache",
+          "timeout": "Timeout pro Stufe",
+          "error_cooldown": "Pause nach Fehler",
+          "quota_cooldown": "Pause nach Kontingent-/Rate-Limit-Fehler (429)"
+        },
+        "data_description": {
+          "name": "Daraus entsteht auch die Entitäts-ID, z. B. tts.tts_fallback_kette.",
+          "language": "Sprache, die verwendet wird, wenn der Aufrufer keine angibt.",
+          "timeout": "Antwortet eine Stufe nicht innerhalb dieser Zeit, geht es mit der nächsten weiter.",
+          "error_cooldown": "So lange wird eine Stufe nach einem normalen Fehler übersprungen. 0 = nie überspringen.",
+          "quota_cooldown": "So lange wird eine Stufe übersprungen, wenn ihr Kontingent aufgebraucht ist (z. B. Gemini Free Tier). 0 = nie überspringen."
+        }
+      },
+      "stage_entity": {
+        "title": "Stufe {stage}: TTS-Dienst wählen",
+        "description": "Bisherige Stufen:\n{stages}\n\nWähle den TTS-Dienst für Stufe {stage}.",
+        "data": {
+          "entity_id": "TTS-Entität"
+        }
+      },
+      "stage_options": {
+        "title": "Stufe {stage}: {entity}",
+        "description": "Optionale Einstellungen für `{entity_id}`. Leer lassen, um die Standards des Dienstes zu nutzen.\n\nVom Dienst unterstützte Optionen: {options}",
+        "data": {
+          "voice": "Stimme",
+          "language": "Sprache (optional)",
+          "extra_options": "Weitere Optionen (optional, YAML)"
+        },
+        "data_description": {
+          "voice": "Z. B. Callirrhoe bei Google Gemini oder Katja bei Home Assistant Cloud. Du kannst auch eine Stimmen-ID eintippen.",
+          "language": "Nur setzen, wenn diese Stufe immer eine bestimmte Sprache nutzen soll.",
+          "extra_options": "Zusätzliche TTS-Optionen des Dienstes, z. B. `audio_output: mp3`."
+        }
+      },
+      "stages": {
+        "title": "Stufen der Kette",
+        "description": "Aktuelle Reihenfolge:\n{stages}",
+        "menu_options": {
+          "stage_entity": "Weitere Stufe hinzufügen",
+          "finish": "Fertig, speichern"
+        }
+      }
+    },
+    "error": {
+      "duplicate_stage": "Diese TTS-Entität ist bereits Teil der Kette.",
+      "own_entity": "Eine Fallback-Kette kann nicht selbst als Stufe verwendet werden.",
+      "voice_not_supported": "Dieser TTS-Dienst unterstützt keine Stimmenauswahl.",
+      "language_not_supported": "Dieser TTS-Dienst unterstützt diese Sprache nicht.",
+      "invalid_extra_options": "Die weiteren Optionen müssen ein Objekt (Schlüssel: Wert) sein."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Fallback-Kette bearbeiten",
+        "description": "Aktuelle Stufen:\n{stages}",
+        "data": {
+          "language": "Standardsprache",
+          "timeout": "Timeout pro Stufe",
+          "error_cooldown": "Pause nach Fehler",
+          "quota_cooldown": "Pause nach Kontingent-/Rate-Limit-Fehler (429)",
+          "redefine_stages": "Stufen neu festlegen"
+        },
+        "data_description": {
+          "timeout": "Antwortet eine Stufe nicht innerhalb dieser Zeit, geht es mit der nächsten weiter.",
+          "error_cooldown": "So lange wird eine Stufe nach einem normalen Fehler übersprungen. 0 = nie überspringen.",
+          "quota_cooldown": "So lange wird eine Stufe übersprungen, wenn ihr Kontingent aufgebraucht ist. 0 = nie überspringen.",
+          "redefine_stages": "Aktivieren, um Reihenfolge, Dienste oder Stimmen zu ändern. Bisherige Stimmen werden als Vorschlag übernommen."
+        }
+      },
+      "stage_entity": {
+        "title": "Stufe {stage}: TTS-Dienst wählen",
+        "description": "Bisherige Stufen:\n{stages}\n\nWähle den TTS-Dienst für Stufe {stage}.",
+        "data": {
+          "entity_id": "TTS-Entität"
+        }
+      },
+      "stage_options": {
+        "title": "Stufe {stage}: {entity}",
+        "description": "Optionale Einstellungen für `{entity_id}`. Leer lassen, um die Standards des Dienstes zu nutzen.\n\nVom Dienst unterstützte Optionen: {options}",
+        "data": {
+          "voice": "Stimme",
+          "language": "Sprache (optional)",
+          "extra_options": "Weitere Optionen (optional, YAML)"
+        },
+        "data_description": {
+          "voice": "Z. B. Callirrhoe bei Google Gemini oder Katja bei Home Assistant Cloud. Du kannst auch eine Stimmen-ID eintippen.",
+          "language": "Nur setzen, wenn diese Stufe immer eine bestimmte Sprache nutzen soll.",
+          "extra_options": "Zusätzliche TTS-Optionen des Dienstes, z. B. `audio_output: mp3`."
+        }
+      },
+      "stages": {
+        "title": "Stufen der Kette",
+        "description": "Aktuelle Reihenfolge:\n{stages}",
+        "menu_options": {
+          "stage_entity": "Weitere Stufe hinzufügen",
+          "finish": "Fertig, speichern"
+        }
+      }
+    },
+    "error": {
+      "duplicate_stage": "Diese TTS-Entität ist bereits Teil der Kette.",
+      "own_entity": "Eine Fallback-Kette kann nicht selbst als Stufe verwendet werden.",
+      "voice_not_supported": "Dieser TTS-Dienst unterstützt keine Stimmenauswahl.",
+      "language_not_supported": "Dieser TTS-Dienst unterstützt diese Sprache nicht.",
+      "invalid_extra_options": "Die weiteren Optionen müssen ein Objekt (Schlüssel: Wert) sein."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "last_stage": {
+        "name": "Zuletzt genutzter TTS-Dienst"
+      }
+    },
+    "button": {
+      "reset_cooldowns": {
+        "name": "Pausen zurücksetzen"
+      }
+    }
+  }
+}

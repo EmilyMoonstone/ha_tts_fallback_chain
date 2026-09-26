@@ -1,0 +1,130 @@
+{
+  "title": "TTS Fallback Chain",
+  "config": {
+    "step": {
+      "user": {
+        "title": "New TTS fallback chain",
+        "description": "The chain provides its own TTS entity. It asks the TTS services one after another and uses the first one that works. You define the stages in the next step.",
+        "data": {
+          "name": "Name",
+          "language": "Default language",
+          "timeout": "Timeout per stage",
+          "error_cooldown": "Pause after an error",
+          "quota_cooldown": "Pause after a quota / rate limit error (429)"
+        },
+        "data_description": {
+          "name": "Also used for the entity ID, e.g. tts.tts_fallback_kette.",
+          "language": "Language used when the caller does not specify one.",
+          "timeout": "If a stage does not answer within this time, the next stage is used.",
+          "error_cooldown": "How long a stage is skipped after a regular error. 0 = never skip.",
+          "quota_cooldown": "How long a stage is skipped when its quota is used up (e.g. Gemini free tier). 0 = never skip."
+        }
+      },
+      "stage_entity": {
+        "title": "Stage {stage}: choose TTS service",
+        "description": "Stages so far:\n{stages}\n\nChoose the TTS service for stage {stage}.",
+        "data": {
+          "entity_id": "TTS entity"
+        }
+      },
+      "stage_options": {
+        "title": "Stage {stage}: {entity}",
+        "description": "Optional settings for `{entity_id}`. Leave empty to use the defaults of the service.\n\nOptions supported by the service: {options}",
+        "data": {
+          "voice": "Voice",
+          "language": "Language (optional)",
+          "extra_options": "Extra options (optional, YAML)"
+        },
+        "data_description": {
+          "voice": "E.g. Callirrhoe for Google Gemini or Katja for Home Assistant Cloud. You can also type a voice ID.",
+          "language": "Only set this if this stage should always use a specific language.",
+          "extra_options": "Additional TTS options of the service, e.g. `audio_output: mp3`."
+        }
+      },
+      "stages": {
+        "title": "Stages of the chain",
+        "description": "Current order:\n{stages}",
+        "menu_options": {
+          "stage_entity": "Add another stage",
+          "finish": "Done, save"
+        }
+      }
+    },
+    "error": {
+      "duplicate_stage": "This TTS entity is already part of the chain.",
+      "own_entity": "A fallback chain can not be used as a stage itself.",
+      "voice_not_supported": "This TTS service does not support choosing a voice.",
+      "language_not_supported": "This TTS service does not support this language.",
+      "invalid_extra_options": "The extra options must be an object (key: value)."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Edit fallback chain",
+        "description": "Current stages:\n{stages}",
+        "data": {
+          "language": "Default language",
+          "timeout": "Timeout per stage",
+          "error_cooldown": "Pause after an error",
+          "quota_cooldown": "Pause after a quota / rate limit error (429)",
+          "redefine_stages": "Redefine stages"
+        },
+        "data_description": {
+          "timeout": "If a stage does not answer within this time, the next stage is used.",
+          "error_cooldown": "How long a stage is skipped after a regular error. 0 = never skip.",
+          "quota_cooldown": "How long a stage is skipped when its quota is used up. 0 = never skip.",
+          "redefine_stages": "Enable to change order, services or voices. Previous voices are suggested again."
+        }
+      },
+      "stage_entity": {
+        "title": "Stage {stage}: choose TTS service",
+        "description": "Stages so far:\n{stages}\n\nChoose the TTS service for stage {stage}.",
+        "data": {
+          "entity_id": "TTS entity"
+        }
+      },
+      "stage_options": {
+        "title": "Stage {stage}: {entity}",
+        "description": "Optional settings for `{entity_id}`. Leave empty to use the defaults of the service.\n\nOptions supported by the service: {options}",
+        "data": {
+          "voice": "Voice",
+          "language": "Language (optional)",
+          "extra_options": "Extra options (optional, YAML)"
+        },
+        "data_description": {
+          "voice": "E.g. Callirrhoe for Google Gemini or Katja for Home Assistant Cloud. You can also type a voice ID.",
+          "language": "Only set this if this stage should always use a specific language.",
+          "extra_options": "Additional TTS options of the service, e.g. `audio_output: mp3`."
+        }
+      },
+      "stages": {
+        "title": "Stages of the chain",
+        "description": "Current order:\n{stages}",
+        "menu_options": {
+          "stage_entity": "Add another stage",
+          "finish": "Done, save"
+        }
+      }
+    },
+    "error": {
+      "duplicate_stage": "This TTS entity is already part of the chain.",
+      "own_entity": "A fallback chain can not be used as a stage itself.",
+      "voice_not_supported": "This TTS service does not support choosing a voice.",
+      "language_not_supported": "This TTS service does not support this language.",
+      "invalid_extra_options": "The extra options must be an object (key: value)."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "last_stage": {
+        "name": "Last used TTS service"
+      }
+    },
+    "button": {
+      "reset_cooldowns": {
+        "name": "Reset pauses"
+      }
+    }
+  }
+}

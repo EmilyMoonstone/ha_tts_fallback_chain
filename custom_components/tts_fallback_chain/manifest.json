@@ -1,0 +1,13 @@
+{
+  "domain": "tts_fallback_chain",
+  "name": "TTS Fallback Chain",
+  "codeowners": ["@EmilyMoonstone"],
+  "config_flow": true,
+  "dependencies": ["tts"],
+  "documentation": "https://github.com/EmilyMoonstone/ha_tts_fallback_chain",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/EmilyMoonstone/ha_tts_fallback_chain/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}
