@@ -1,0 +1,33 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install -r requirements_test.txt
+      - run: python -m pytest -q
+
+  hacs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: hacs/action@main
+        with:
+          category: integration
+          # Brand images, repository description and topics are GitHub /
+          # home-assistant/brands settings, not part of the code.
+          ignore: brands description topics
