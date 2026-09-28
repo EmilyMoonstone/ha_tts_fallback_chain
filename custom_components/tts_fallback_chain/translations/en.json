@@ -8,15 +8,17 @@
         "data": {
           "name": "Name",
           "language": "Default language",
-          "timeout": "Timeout per stage",
+          "timeout": "Timeout per stage (default)",
+          "max_wait": "Maximum total wait",
           "error_cooldown": "Pause after an error",
           "quota_cooldown": "Pause after a quota / rate limit error (429)"
         },
         "data_description": {
           "name": "Also used for the entity ID, e.g. tts.tts_fallback_kette.",
           "language": "Language used when the caller does not specify one.",
-          "timeout": "If a stage does not answer within this time, the next stage is used.",
-          "error_cooldown": "How long a stage is skipped after a regular error. 0 = never skip.",
+          "timeout": "If a stage has not delivered audio after this time, the next stage is started as well. The slow stage keeps running and the first finished audio is used. A timeout is not an error and never pauses a stage. Can be overridden per stage.",
+          "max_wait": "If no stage delivered audio by then, the announcement is aborted.",
+          "error_cooldown": "How long a stage is skipped after an error (e.g. 503). Timeouts never pause a stage. 0 = never skip.",
           "quota_cooldown": "How long a stage is skipped when its quota is used up (e.g. Gemini free tier). 0 = never skip."
         }
       },
@@ -33,11 +35,13 @@
         "data": {
           "voice": "Voice",
           "language": "Language (optional)",
+          "timeout": "Timeout of this stage (optional)",
           "extra_options": "Extra options (optional, YAML)"
         },
         "data_description": {
           "voice": "E.g. Callirrhoe for Google Gemini or Katja for Home Assistant Cloud. You can also type a voice ID.",
           "language": "Only set this if this stage should always use a specific language.",
+          "timeout": "Leave empty for the default ({default_timeout} s). Choose a longer value for a slow but reliable stage (e.g. a paid Gemini key).",
           "extra_options": "Additional TTS options of the service, e.g. `audio_output: mp3`."
         }
       },
@@ -65,16 +69,18 @@
         "description": "Current stages:\n{stages}",
         "data": {
           "language": "Default language",
-          "timeout": "Timeout per stage",
+          "timeout": "Timeout per stage (default)",
+          "max_wait": "Maximum total wait",
           "error_cooldown": "Pause after an error",
           "quota_cooldown": "Pause after a quota / rate limit error (429)",
           "redefine_stages": "Redefine stages"
         },
         "data_description": {
-          "timeout": "If a stage does not answer within this time, the next stage is used.",
-          "error_cooldown": "How long a stage is skipped after a regular error. 0 = never skip.",
+          "timeout": "If a stage has not delivered audio after this time, the next stage is started as well. The slow stage keeps running and the first finished audio is used. A timeout is not an error and never pauses a stage. Can be overridden per stage.",
+          "max_wait": "If no stage delivered audio by then, the announcement is aborted.",
+          "error_cooldown": "How long a stage is skipped after an error (e.g. 503). Timeouts never pause a stage. 0 = never skip.",
           "quota_cooldown": "How long a stage is skipped when its quota is used up. 0 = never skip.",
-          "redefine_stages": "Enable to change order, services or voices. Previous voices are suggested again."
+          "redefine_stages": "Enable to change order, services, voices or per-stage timeouts. Previous settings are suggested again."
         }
       },
       "stage_entity": {
@@ -90,11 +96,13 @@
         "data": {
           "voice": "Voice",
           "language": "Language (optional)",
+          "timeout": "Timeout of this stage (optional)",
           "extra_options": "Extra options (optional, YAML)"
         },
         "data_description": {
           "voice": "E.g. Callirrhoe for Google Gemini or Katja for Home Assistant Cloud. You can also type a voice ID.",
           "language": "Only set this if this stage should always use a specific language.",
+          "timeout": "Leave empty for the default ({default_timeout} s). Choose a longer value for a slow but reliable stage (e.g. a paid Gemini key).",
           "extra_options": "Additional TTS options of the service, e.g. `audio_output: mp3`."
         }
       },

@@ -12,7 +12,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
-from custom_components.tts_fallback_chain.const import DOMAIN, EVENT_STAGE_FAILED
+from custom_components.tts_fallback_chain.const import (
+    DOMAIN,
+    EVENT_STAGE_FAILED,
+    EVENT_STAGE_SLOW,
+)
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_capture_events,
@@ -135,10 +139,84 @@ async def test_all_google_down_uses_cloud(
     assert sensor.attributes["stages"][0]["in_cooldown"] is True
 
 
-async def test_timeout_falls_back(hass: HomeAssistant, fake_engines: dict[str, FakeTTS]) -> None:
-    await setup_chain(hass, timeout=0.2)
+async def test_slow_stage_starts_next_without_pause(
+    hass: HomeAssistant, fake_engines: dict[str, FakeTTS]
+) -> None:
+    entry = await setup_chain(hass, timeout=0.2)
+    slow_events = async_capture_events(hass, EVENT_STAGE_SLOW)
+    failed_events = async_capture_events(hass, EVENT_STAGE_FAILED)
     fake_engines["free"].delay = 2
     assert await speak(hass, "Hallo") == b"Paid:Hallo"
+    await hass.async_block_till_done()
+
+    stats = entry.runtime_data.stats[0]
+    assert stats.slow == 1
+    assert stats.failures == 0
+    assert stats.cooldown_until is None  # slow is not an error -> no pause
+    assert [event.data["entity_id"] for event in slow_events] == ["tts.free"]
+    assert not failed_events
+
+    # The next announcement starts with the free stage again.
+    fake_engines["free"].delay = 0
+    assert await speak(hass, "Nochmal") == b"Free:Nochmal"
+
+
+async def test_slow_stage_can_still_win(
+    hass: HomeAssistant, fake_engines: dict[str, FakeTTS]
+) -> None:
+    """A slow stage keeps running; if it finishes first, its audio is used."""
+    entry = await setup_chain(hass, timeout=0.2)
+    fake_engines["free"].delay = 0.6
+    fake_engines["paid"].delay = 3
+    fake_engines["cloud"].delay = 3
+    assert await speak(hass, "Hallo") == b"Free:Hallo"
+    # paid and cloud were started in parallel while free was still generating
+    assert len(fake_engines["paid"].calls) == 1
+    assert len(fake_engines["cloud"].calls) == 1
+    chain = entry.runtime_data
+    assert chain.last_stage_index == 0
+    assert chain.stats[0].slow == 1
+    assert chain.stats[0].successes == 1
+    assert 0.5 < chain.stats[0].last_duration < 2
+
+
+async def test_error_while_slow_stage_runs_starts_next_immediately(
+    hass: HomeAssistant, fake_engines: dict[str, FakeTTS]
+) -> None:
+    entry = await setup_chain(hass, timeout=0.2)
+    fake_engines["free"].delay = 3
+    fake_engines["paid"].error = HomeAssistantError("503 UNAVAILABLE high demand")
+    assert await speak(hass, "Hallo") == b"Cloud:Hallo"
+    chain = entry.runtime_data
+    assert chain.stats[0].cooldown_until is None  # only slow
+    assert chain.stats[1].cooldown_until is not None  # real error
+    # cloud started right after the paid error, not after another timeout
+    assert chain.stats[2].last_duration < 0.2
+
+
+async def test_per_stage_timeout(hass: HomeAssistant, fake_engines: dict[str, FakeTTS]) -> None:
+    await setup_chain(
+        hass,
+        timeout=0.1,
+        stages=[
+            {"entity_id": "tts.free", "voice": "callirrhoe", "timeout": 2},
+            {"entity_id": "tts.paid", "voice": "callirrhoe"},
+        ],
+    )
+    fake_engines["free"].delay = 0.4
+    assert await speak(hass, "Hallo") == b"Free:Hallo"
+    assert not fake_engines["paid"].calls
+
+
+async def test_max_wait(hass: HomeAssistant, fake_engines: dict[str, FakeTTS]) -> None:
+    entry = await setup_chain(hass, timeout=0.1, max_wait=0.5)
+    for engine in fake_engines.values():
+        engine.delay = 3
+    with pytest.raises(HomeAssistantError, match="0.5 s"):
+        await speak(hass, "Hallo")
+    chain = entry.runtime_data
+    assert all(stats.cooldown_until is None for stats in chain.stats)
+    assert all(stats.slow == 1 for stats in chain.stats)
 
 
 async def test_stages_in_cooldown_are_last_resort(

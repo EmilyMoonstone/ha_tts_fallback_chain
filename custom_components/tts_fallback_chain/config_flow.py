@@ -41,12 +41,14 @@ from .const import (
     CONF_ERROR_COOLDOWN,
     CONF_EXTRA_OPTIONS,
     CONF_LANGUAGE,
+    CONF_MAX_WAIT,
     CONF_QUOTA_COOLDOWN,
     CONF_REDEFINE_STAGES,
     CONF_STAGES,
     CONF_TIMEOUT,
     CONF_VOICE,
     DEFAULT_ERROR_COOLDOWN,
+    DEFAULT_MAX_WAIT,
     DEFAULT_NAME,
     DEFAULT_QUOTA_COOLDOWN,
     DEFAULT_TIMEOUT,
@@ -73,6 +75,13 @@ def _settings_schema(hass: HomeAssistant, defaults: Mapping[str, Any]) -> dict:
             )
         ),
         vol.Required(
+            CONF_MAX_WAIT, default=defaults.get(CONF_MAX_WAIT, DEFAULT_MAX_WAIT)
+        ): NumberSelector(
+            NumberSelectorConfig(
+                min=5, max=600, step=1, unit_of_measurement="s", mode=NumberSelectorMode.BOX
+            )
+        ),
+        vol.Required(
             CONF_ERROR_COOLDOWN,
             default=defaults.get(CONF_ERROR_COOLDOWN, DEFAULT_ERROR_COOLDOWN),
         ): NumberSelector(
@@ -96,6 +105,7 @@ def _clean_settings(user_input: Mapping[str, Any]) -> dict[str, Any]:
     return {
         CONF_LANGUAGE: user_input[CONF_LANGUAGE],
         CONF_TIMEOUT: float(user_input[CONF_TIMEOUT]),
+        CONF_MAX_WAIT: float(user_input[CONF_MAX_WAIT]),
         CONF_ERROR_COOLDOWN: float(user_input[CONF_ERROR_COOLDOWN]),
         CONF_QUOTA_COOLDOWN: float(user_input[CONF_QUOTA_COOLDOWN]),
     }
@@ -155,6 +165,7 @@ class _StageFlowMixin:
             voice = str(user_input.get(CONF_VOICE) or "").strip()
             language = str(user_input.get(CONF_LANGUAGE) or "").strip()
             extra = user_input.get(CONF_EXTRA_OPTIONS) or {}
+            timeout = user_input.get(CONF_TIMEOUT)
             supported_options = (entity.supported_options or []) if entity else None
 
             if not isinstance(extra, Mapping):
@@ -180,6 +191,8 @@ class _StageFlowMixin:
                     stage[CONF_LANGUAGE] = language
                 if extra:
                     stage[CONF_EXTRA_OPTIONS] = dict(extra)
+                if timeout:
+                    stage[CONF_TIMEOUT] = float(timeout)
                 self._stages.append(stage)
                 self._pending_entity_id = None
                 return await self.async_step_stages()
@@ -219,6 +232,15 @@ class _StageFlowMixin:
         ] = language_selector
         schema[
             vol.Optional(
+                CONF_TIMEOUT, description={"suggested_value": suggested.get(CONF_TIMEOUT)}
+            )
+        ] = NumberSelector(
+            NumberSelectorConfig(
+                min=2, max=300, step=1, unit_of_measurement="s", mode=NumberSelectorMode.BOX
+            )
+        )
+        schema[
+            vol.Optional(
                 CONF_EXTRA_OPTIONS,
                 description={"suggested_value": suggested.get(CONF_EXTRA_OPTIONS)},
             )
@@ -234,6 +256,7 @@ class _StageFlowMixin:
                 "entity": state.name if state else entity_id,
                 "entity_id": entity_id,
                 "options": ", ".join(entity.supported_options or []) if entity else "-",
+                "default_timeout": f"{self._settings.get(CONF_TIMEOUT, DEFAULT_TIMEOUT):g}",
             },
         )
 
@@ -277,7 +300,7 @@ class _StageFlowMixin:
             name = state.name if state else stage[CONF_ENTITY_ID]
             details = [
                 f"{key}: {stage[key]}"
-                for key in (CONF_VOICE, CONF_LANGUAGE, CONF_EXTRA_OPTIONS)
+                for key in (CONF_VOICE, CONF_LANGUAGE, CONF_TIMEOUT, CONF_EXTRA_OPTIONS)
                 if stage.get(key)
             ]
             suffix = f" ({', '.join(details)})" if details else ""
