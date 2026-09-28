@@ -24,23 +24,37 @@ springt die Kette automatisch auf den bezahlten Key. Fällt auch der aus,
 - **Eigene Stimme pro Stufe:** Die Stimme wird als Dropdown mit den Stimmen des
   jeweiligen Dienstes angeboten. Du kannst sie auch frei eintippen.
 - Optional pro Stufe eine **feste Sprache** und **weitere TTS-Optionen**.
-- **Timeout pro Stufe:** Hängt ein Dienst, geht es nach X Sekunden mit der
-  nächsten Stufe weiter.
-- **Pausen (Cooldown):** Eine fehlgeschlagene Stufe wird eine Zeit lang
-  übersprungen, damit nicht jede Ansage erst in den Fehler läuft.
+- **Fehler und langsame Erstellung werden unterschiedlich behandelt:**
+  - **Fehler** (z. B. 503 „high demand“ oder 429 Kontingent): Die nächste Stufe
+    startet sofort, und die fehlerhafte Stufe wird pausiert (siehe unten).
+  - **Langsam** (Timeout der Stufe abgelaufen, aber noch kein Fehler): Die
+    Stufe wird **nicht abgebrochen und nicht pausiert**. Die nächste Stufe
+    startet zusätzlich parallel, und das zuerst fertige Audio wird genommen.
+    Liefert die langsame Stufe doch noch zuerst, wird ihr Audio verwendet.
+- **Timeout pro Stufe:** Es gibt einen Standard-Timeout (20 s), den du pro Stufe
+  überschreiben kannst, z. B. kurz für Free und lang für den bezahlten Key.
+- **Maximale Gesamtwartezeit** (Standard 120 s): Liefert bis dahin keine Stufe
+  Audio, wird die Ansage abgebrochen.
+- **Pausen (Cooldown), nur nach Fehlern:** Eine fehlerhafte Stufe wird eine
+  Zeit lang übersprungen, damit nicht jede Ansage erst in den Fehler läuft.
   - nach einem normalen Fehler: Standard 5 Minuten
   - nach einem Kontingent- oder Rate-Limit-Fehler (429): Standard 60 Minuten
+  - Timeouts lösen keine Pause aus.
   - Sind alle Stufen pausiert, werden sie trotzdem der Reihe nach versucht.
     Eine Ansage fällt also nie nur wegen einer Pause aus.
 - **Sensor „Zuletzt genutzter TTS-Dienst“:** Zeigt, welche Stufe zuletzt
-  geantwortet hat. Als Attribute gibt es pro Stufe Erfolge, Fehler, den letzten
-  Fehler und das Ende der Pause. Damit siehst du auch, wie schnell das
-  Free-Kontingent aufgebraucht ist.
+  geantwortet hat und wie lange die Erstellung gedauert hat. Als Attribute gibt
+  es pro Stufe: Erfolge, Fehler, Anzahl langsamer Anfragen, letzte und
+  durchschnittliche Dauer, den letzten Fehler und das Ende der Pause. Mit den
+  Dauern kannst du die Timeouts begründet festlegen.
 - **Button „Pausen zurücksetzen“:** Alle Stufen werden sofort wieder normal
   versucht.
 - **Events** für eigene Automationen:
-  - `tts_fallback_chain_stage_failed` enthält `stage`, `entity_id`, `error`,
-    `quota_error`, `cooldown_until` und `message`.
+  - `tts_fallback_chain_stage_failed` (nur echte Fehler) enthält `stage`,
+    `entity_id`, `error`, `quota_error`, `duration`, `cooldown_until` und
+    `message`.
+  - `tts_fallback_chain_stage_slow` (Timeout, die Stufe läuft weiter) enthält
+    `stage`, `entity_id`, `waited` und `message`.
   - `tts_fallback_chain_all_stages_failed` enthält `message` und `errors`.
 - Die Ansagen der Kette landen ganz normal im TTS-Cache von Home Assistant. Eine
   wiederholte Ansage verbraucht also kein Kontingent.
@@ -59,9 +73,13 @@ nach `config/custom_components/` und starte Home Assistant neu.
 ## Einrichtung
 
 1. **Einstellungen → Geräte & Dienste → Integration hinzufügen → „TTS Fallback Chain“**.
-2. Allgemeine Einstellungen: Name, Standardsprache, Timeout und Pausen.
+2. Allgemeine Einstellungen: Name, Standardsprache, Standard-Timeout,
+   Gesamtwartezeit und Pausen.
 3. **Stufe 1:** Google AI TTS Free wählen, danach als Stimme **Callirrhoe**.
-4. **Weitere Stufe hinzufügen** → Google AI TTS (bezahlt), Stimme **Callirrhoe**.
+   Den Timeout leer lassen, dann gilt der Standard von 20 s.
+4. **Weitere Stufe hinzufügen** → Google AI TTS (bezahlt), Stimme **Callirrhoe**,
+   Timeout z. B. **45 s**. Gemini erzeugt die komplette Audiodatei, bevor es sie
+   schickt, und braucht bei langen Texten oder hoher Last entsprechend länger.
 5. **Weitere Stufe hinzufügen** → Home Assistant Cloud, Stimme **Katja**
    (`KatjaNeural`).
 6. **Fertig, speichern.**
@@ -69,9 +87,10 @@ nach `config/custom_components/` und starte Home Assistant neu.
 Die neue Entität `tts.<name>` kannst du jetzt überall auswählen, wo man eine
 TTS-Engine auswählen kann: Assist-Pipeline, Music Assistant, `tts.speak`, …
 
-Später ändern: Integration → **Konfigurieren**. Timeout und Pausen änderst du
-direkt. Für neue Stufen, eine andere Reihenfolge oder andere Stimmen setzt du
-den Haken **„Stufen neu festlegen“**. Die bisherigen Stimmen werden dabei als
+Später ändern: Integration → **Konfigurieren**. Standard-Timeout,
+Gesamtwartezeit und Pausen änderst du direkt. Für neue Stufen, eine andere
+Reihenfolge, andere Stimmen oder Timeouts pro Stufe setzt du den Haken
+**„Stufen neu festlegen“**. Die bisherigen Einstellungen werden dabei als
 Vorschlag übernommen.
 
 ### Stimmen-IDs

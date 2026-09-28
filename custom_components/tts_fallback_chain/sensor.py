@@ -43,6 +43,11 @@ class LastStageSensor(FallbackChainEntity, SensorEntity):
             "stage": index + 1 if index is not None else None,
             "entity_id": self.chain.stages[index].entity_id if index is not None else None,
             "last_used": self.chain.last_used_at.isoformat() if self.chain.last_used_at else None,
+            "last_duration": (
+                round(self.chain.last_duration, 1)
+                if self.chain.last_duration is not None
+                else None
+            ),
             "last_error": self.chain.last_error,
             "stages": self.chain.as_dict(),
         }

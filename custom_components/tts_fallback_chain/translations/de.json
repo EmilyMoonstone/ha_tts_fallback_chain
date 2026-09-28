@@ -8,15 +8,17 @@
         "data": {
           "name": "Name",
           "language": "Standardsprache",
-          "timeout": "Timeout pro Stufe",
+          "timeout": "Timeout pro Stufe (Standard)",
+          "max_wait": "Maximale Gesamtwartezeit",
           "error_cooldown": "Pause nach Fehler",
           "quota_cooldown": "Pause nach Kontingent-/Rate-Limit-Fehler (429)"
         },
         "data_description": {
           "name": "Daraus entsteht auch die Entitäts-ID, z. B. tts.tts_fallback_kette.",
           "language": "Sprache, die verwendet wird, wenn der Aufrufer keine angibt.",
-          "timeout": "Antwortet eine Stufe nicht innerhalb dieser Zeit, geht es mit der nächsten weiter.",
-          "error_cooldown": "So lange wird eine Stufe nach einem normalen Fehler übersprungen. 0 = nie überspringen.",
+          "timeout": "Liefert eine Stufe nach dieser Zeit noch kein Audio, startet zusätzlich die nächste Stufe. Die langsame Stufe läuft weiter, das zuerst fertige Audio wird genommen. Ein Timeout ist kein Fehler und führt zu keiner Pause. Kann pro Stufe überschrieben werden.",
+          "max_wait": "Liefert bis dahin keine Stufe Audio, wird die Ansage abgebrochen.",
+          "error_cooldown": "So lange wird eine Stufe nach einem Fehler (z. B. 503) übersprungen. Timeouts lösen keine Pause aus. 0 = nie überspringen.",
           "quota_cooldown": "So lange wird eine Stufe übersprungen, wenn ihr Kontingent aufgebraucht ist (z. B. Gemini Free Tier). 0 = nie überspringen."
         }
       },
@@ -33,11 +35,13 @@
         "data": {
           "voice": "Stimme",
           "language": "Sprache (optional)",
+          "timeout": "Timeout dieser Stufe (optional)",
           "extra_options": "Weitere Optionen (optional, YAML)"
         },
         "data_description": {
           "voice": "Z. B. Callirrhoe bei Google Gemini oder Katja bei Home Assistant Cloud. Du kannst auch eine Stimmen-ID eintippen.",
           "language": "Nur setzen, wenn diese Stufe immer eine bestimmte Sprache nutzen soll.",
+          "timeout": "Leer lassen für den Standard ({default_timeout} s). Für eine langsame, aber zuverlässige Stufe (z. B. bezahlter Gemini-Key) eher länger wählen.",
           "extra_options": "Zusätzliche TTS-Optionen des Dienstes, z. B. `audio_output: mp3`."
         }
       },
@@ -65,16 +69,18 @@
         "description": "Aktuelle Stufen:\n{stages}",
         "data": {
           "language": "Standardsprache",
-          "timeout": "Timeout pro Stufe",
+          "timeout": "Timeout pro Stufe (Standard)",
+          "max_wait": "Maximale Gesamtwartezeit",
           "error_cooldown": "Pause nach Fehler",
           "quota_cooldown": "Pause nach Kontingent-/Rate-Limit-Fehler (429)",
           "redefine_stages": "Stufen neu festlegen"
         },
         "data_description": {
-          "timeout": "Antwortet eine Stufe nicht innerhalb dieser Zeit, geht es mit der nächsten weiter.",
-          "error_cooldown": "So lange wird eine Stufe nach einem normalen Fehler übersprungen. 0 = nie überspringen.",
+          "timeout": "Liefert eine Stufe nach dieser Zeit noch kein Audio, startet zusätzlich die nächste Stufe. Die langsame Stufe läuft weiter, das zuerst fertige Audio wird genommen. Ein Timeout ist kein Fehler und führt zu keiner Pause. Kann pro Stufe überschrieben werden.",
+          "max_wait": "Liefert bis dahin keine Stufe Audio, wird die Ansage abgebrochen.",
+          "error_cooldown": "So lange wird eine Stufe nach einem Fehler (z. B. 503) übersprungen. Timeouts lösen keine Pause aus. 0 = nie überspringen.",
           "quota_cooldown": "So lange wird eine Stufe übersprungen, wenn ihr Kontingent aufgebraucht ist. 0 = nie überspringen.",
-          "redefine_stages": "Aktivieren, um Reihenfolge, Dienste oder Stimmen zu ändern. Bisherige Stimmen werden als Vorschlag übernommen."
+          "redefine_stages": "Aktivieren, um Reihenfolge, Dienste, Stimmen oder Timeouts pro Stufe zu ändern. Bisherige Einstellungen werden als Vorschlag übernommen."
         }
       },
       "stage_entity": {
@@ -90,11 +96,13 @@
         "data": {
           "voice": "Stimme",
           "language": "Sprache (optional)",
+          "timeout": "Timeout dieser Stufe (optional)",
           "extra_options": "Weitere Optionen (optional, YAML)"
         },
         "data_description": {
           "voice": "Z. B. Callirrhoe bei Google Gemini oder Katja bei Home Assistant Cloud. Du kannst auch eine Stimmen-ID eintippen.",
           "language": "Nur setzen, wenn diese Stufe immer eine bestimmte Sprache nutzen soll.",
+          "timeout": "Leer lassen für den Standard ({default_timeout} s). Für eine langsame, aber zuverlässige Stufe (z. B. bezahlter Gemini-Key) eher länger wählen.",
           "extra_options": "Zusätzliche TTS-Optionen des Dienstes, z. B. `audio_output: mp3`."
         }
       },

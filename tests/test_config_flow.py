@@ -53,7 +53,7 @@ async def test_full_flow(hass: HomeAssistant, fake_engines) -> None:
         result["flow_id"], {"entity_id": "tts.paid"}
     )
     result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"voice": "callirrhoe"}
+        result["flow_id"], {"voice": "callirrhoe", "timeout": 45}
     )
 
     # Stage 3: cloud with Katja (voices of the German language are offered)
@@ -75,9 +75,10 @@ async def test_full_flow(hass: HomeAssistant, fake_engines) -> None:
     assert result["title"] == "TTS Fallback-Kette"
     assert result["options"]["stages"] == [
         {"entity_id": "tts.free", "voice": "callirrhoe"},
-        {"entity_id": "tts.paid", "voice": "callirrhoe"},
+        {"entity_id": "tts.paid", "voice": "callirrhoe", "timeout": 45.0},
         {"entity_id": "tts.cloud", "voice": "KatjaNeural"},
     ]
+    assert result["options"]["max_wait"] == 120
     await hass.async_block_till_done()
     assert hass.states.get("tts.tts_fallback_kette") is not None
 

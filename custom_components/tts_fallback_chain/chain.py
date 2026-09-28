@@ -1,10 +1,21 @@
-"""Fallback chain logic: ask the configured TTS engines one after another."""
+"""Fallback chain logic: ask the configured TTS engines one after another.
+
+Errors and slow generations are handled differently:
+
+* An **error** (exception from the engine, e.g. 503 or 429) means the stage is
+  down. The next stage starts immediately and the failed stage is paused for a
+  while (cooldown), so later announcements do not run into the same error.
+* A **slow generation** (the stage's timeout elapsed without audio) is not an
+  error. The slow stage keeps running, the next stage is started in parallel
+  and whichever stage delivers audio first wins. Slow stages are never paused.
+"""
 
 import asyncio
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import logging
+from time import monotonic
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.tts import (
@@ -21,15 +32,18 @@ from .const import (
     CONF_ERROR_COOLDOWN,
     CONF_EXTRA_OPTIONS,
     CONF_LANGUAGE,
+    CONF_MAX_WAIT,
     CONF_QUOTA_COOLDOWN,
     CONF_STAGES,
     CONF_TIMEOUT,
     CONF_VOICE,
     DEFAULT_ERROR_COOLDOWN,
+    DEFAULT_MAX_WAIT,
     DEFAULT_QUOTA_COOLDOWN,
     DEFAULT_TIMEOUT,
     EVENT_ALL_STAGES_FAILED,
     EVENT_STAGE_FAILED,
+    EVENT_STAGE_SLOW,
     QUOTA_ERROR_MARKERS,
 )
 
@@ -67,10 +81,12 @@ def is_quota_error(err: BaseException) -> bool:
 
 def _error_text(err: BaseException) -> str:
     """Return a short, readable description of an error."""
-    if isinstance(err, TimeoutError):
-        return "Timeout"
     text = str(err) or type(err).__name__
     return text if len(text) <= 300 else f"{text[:297]}..."
+
+
+def _iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,15 +97,18 @@ class Stage:
     voice: str | None = None
     language: str | None = None
     extra_options: Mapping[str, Any] = field(default_factory=dict)
+    timeout: float | None = None  # None = use the chain's default timeout
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "Stage":
         """Create a stage from stored config entry options."""
+        timeout = data.get(CONF_TIMEOUT)
         return cls(
             entity_id=data[CONF_ENTITY_ID],
             voice=data.get(CONF_VOICE) or None,
             language=data.get(CONF_LANGUAGE) or None,
             extra_options=dict(data.get(CONF_EXTRA_OPTIONS) or {}),
+            timeout=float(timeout) if timeout else None,
         )
 
     def build_options(self) -> dict[str, Any]:
@@ -106,14 +125,22 @@ class StageStats:
 
     successes: int = 0
     failures: int = 0
+    slow: int = 0
     cooldown_until: datetime | None = None
     last_error: str | None = None
     last_error_at: datetime | None = None
     last_success_at: datetime | None = None
+    last_duration: float | None = None
+    total_duration: float = 0.0
 
     def in_cooldown(self, now: datetime) -> bool:
         """Return True if the stage should currently be skipped."""
         return self.cooldown_until is not None and self.cooldown_until > now
+
+    @property
+    def average_duration(self) -> float | None:
+        """Average generation time of successful requests in seconds."""
+        return self.total_duration / self.successes if self.successes else None
 
 
 class FallbackChain:
@@ -126,16 +153,19 @@ class FallbackChain:
         timeout: float,
         error_cooldown: timedelta,
         quota_cooldown: timedelta,
+        max_wait: float = DEFAULT_MAX_WAIT,
     ) -> None:
         """Initialize the chain."""
         self.hass = hass
         self.stages = stages
         self.timeout = timeout
+        self.max_wait = max_wait
         self.error_cooldown = error_cooldown
         self.quota_cooldown = quota_cooldown
         self.stats = [StageStats() for _ in stages]
         self.last_stage_index: int | None = None
         self.last_used_at: datetime | None = None
+        self.last_duration: float | None = None
         self.last_error: str | None = None
         self._listeners: list[Callable[[], None]] = []
 
@@ -154,6 +184,7 @@ class FallbackChain:
             quota_cooldown=timedelta(
                 minutes=float(options.get(CONF_QUOTA_COOLDOWN, DEFAULT_QUOTA_COOLDOWN))
             ),
+            max_wait=float(options.get(CONF_MAX_WAIT, DEFAULT_MAX_WAIT)),
         )
 
     # ------------------------------------------------------------------
@@ -184,6 +215,10 @@ class FallbackChain:
         if (state := self.hass.states.get(entity_id)) is not None:
             return state.name
         return entity_id
+
+    def stage_timeout(self, index: int) -> float:
+        """Seconds to wait for a stage before starting the next one."""
+        return self.stages[index].timeout or self.timeout
 
     @callback
     def async_reset_cooldowns(self) -> None:
@@ -234,7 +269,7 @@ class FallbackChain:
     # ------------------------------------------------------------------
     # Core
 
-    async def _async_try_stage(
+    async def _async_run_stage(
         self, stage: Stage, message: str, language: str | None
     ) -> tuple[str, bytes]:
         """Generate audio with a single stage. Raises on any failure."""
@@ -248,66 +283,115 @@ class FallbackChain:
             # need to store every stage's audio on disk as well.
             cache=False,
         )
-        async with asyncio.timeout(self.timeout):
-            extension, data = await async_get_media_source_audio(
-                self.hass, media_source_id
-            )
+        extension, data = await async_get_media_source_audio(self.hass, media_source_id)
         if not extension or not data:
             raise HomeAssistantError("Engine returned no audio")
         return extension, data
 
-    async def async_get_tts_audio(
-        self, message: str, language: str | None
-    ) -> tuple[str, bytes]:
-        """Return audio from the first stage that succeeds."""
+    def _stage_order(self, errors: list[str]) -> list[int]:
+        """Return the stage indexes to try, in order.
+
+        Stages that are paused after an error come last, as a last resort.
+        """
         now = dt_util.utcnow()
         ready: list[int] = []
         cooling_down: list[int] = []
-        errors: list[str] = []
-
         for index, stage in enumerate(self.stages):
             if reason := self._unavailable_reason(stage):
                 _LOGGER.debug("Skipping %s: %s", stage.entity_id, reason)
                 errors.append(f"{self.stage_name(index)}: {reason}")
-                continue
-            if self.stats[index].in_cooldown(now):
+            elif self.stats[index].in_cooldown(now):
                 _LOGGER.debug(
-                    "Skipping %s until %s (cooldown)",
+                    "Stage %s (%s) is paused until %s, trying it last",
+                    index + 1,
                     stage.entity_id,
                     self.stats[index].cooldown_until,
                 )
                 cooling_down.append(index)
-                continue
-            ready.append(index)
+            else:
+                ready.append(index)
+        return ready + cooling_down
 
-        # Stages in cooldown are still tried as a last resort, in their order.
-        for index in ready + cooling_down:
-            stage = self.stages[index]
-            stats = self.stats[index]
-            try:
-                extension, data = await self._async_try_stage(stage, message, language)
-            except Exception as err:  # noqa: BLE001 - any failure means: next stage
-                self._async_record_failure(index, err, message)
-                errors.append(f"{self.stage_name(index)}: {_error_text(err)}")
-                continue
+    async def async_get_tts_audio(
+        self, message: str, language: str | None
+    ) -> tuple[str, bytes]:
+        """Return audio from the first stage that delivers it."""
+        loop = asyncio.get_running_loop()
+        errors: list[str] = []
+        order = self._stage_order(errors)
+        deadline = loop.time() + self.max_wait
 
-            stats.successes += 1
-            stats.cooldown_until = None
-            stats.last_success_at = dt_util.utcnow()
-            self.last_stage_index = index
-            self.last_used_at = stats.last_success_at
-            self.last_error = None
-            if index != 0:
-                _LOGGER.info(
-                    "TTS fallback: answered by stage %s (%s)",
-                    index + 1,
-                    stage.entity_id,
+        running: dict[asyncio.Task[tuple[str, bytes]], int] = {}
+        started_at: dict[int, float] = {}
+        reported_slow: set[int] = set()
+        next_pos = 0
+        current: int | None = None  # the stage started most recently
+        next_start_at = 0.0
+
+        try:
+            while True:
+                now = loop.time()
+                current_running = current is not None and current in running.values()
+
+                # Start the next stage when the current one failed or is slow.
+                if (
+                    next_pos < len(order)
+                    and now < deadline
+                    and (not current_running or now >= next_start_at)
+                ):
+                    if current_running and current is not None:
+                        self._async_record_slow(current, now - started_at[current], message)
+                        reported_slow.add(current)
+                    current = order[next_pos]
+                    next_pos += 1
+                    started_at[current] = now
+                    next_start_at = now + self.stage_timeout(current)
+                    task = self.hass.async_create_task(
+                        self._async_run_stage(self.stages[current], message, language),
+                        f"tts_fallback_chain stage {current + 1}",
+                    )
+                    running[task] = current
+                    continue
+
+                if not running:
+                    break  # every stage failed
+
+                wait_until = deadline
+                if next_pos < len(order):
+                    wait_until = min(deadline, next_start_at)
+                if now >= deadline:
+                    for index in running.values():
+                        if index not in reported_slow:
+                            self._async_record_slow(index, now - started_at[index], message)
+                        errors.append(
+                            f"{self.stage_name(index)}: keine Antwort nach {self.max_wait:g} s"
+                        )
+                    break
+
+                done, _pending = await asyncio.wait(
+                    running, timeout=wait_until - now, return_when=asyncio.FIRST_COMPLETED
                 )
-            self._async_notify()
-            return extension, data
+                finished = sorted(done, key=lambda task: running[task])
+                for task in finished:
+                    index = running.pop(task)
+                    duration = loop.time() - started_at[index]
+                    try:
+                        extension, data = task.result()
+                    except Exception as err:  # noqa: BLE001 - any failure: next stage
+                        self._async_record_failure(index, err, duration, message)
+                        errors.append(f"{self.stage_name(index)}: {_error_text(err)}")
+                        continue
+                    self._async_record_success(index, duration)
+                    return extension, data
+        finally:
+            for task in running:
+                task.cancel()
+            if running:
+                await asyncio.gather(*running, return_exceptions=True)
 
         self.last_stage_index = None
         self.last_used_at = dt_util.utcnow()
+        self.last_duration = None
         self.last_error = "; ".join(errors) or "Keine Stufen konfiguriert"
         self.hass.bus.async_fire(
             EVENT_ALL_STAGES_FAILED,
@@ -316,9 +400,59 @@ class FallbackChain:
         self._async_notify()
         raise HomeAssistantError(f"All TTS stages failed: {self.last_error}")
 
+    # ------------------------------------------------------------------
+    # Bookkeeping
+
     @callback
-    def _async_record_failure(self, index: int, err: BaseException, message: str) -> None:
-        """Remember a failed stage and put it into cooldown."""
+    def _async_record_success(self, index: int, duration: float) -> None:
+        """Remember a successful generation."""
+        stats = self.stats[index]
+        stats.successes += 1
+        stats.cooldown_until = None
+        stats.last_success_at = dt_util.utcnow()
+        stats.last_duration = duration
+        stats.total_duration += duration
+        self.last_stage_index = index
+        self.last_used_at = stats.last_success_at
+        self.last_duration = duration
+        self.last_error = None
+        log = _LOGGER.info if index != 0 else _LOGGER.debug
+        log(
+            "TTS answered by stage %s (%s) after %.1f s",
+            index + 1,
+            self.stages[index].entity_id,
+            duration,
+        )
+        self._async_notify()
+
+    @callback
+    def _async_record_slow(self, index: int, waited: float, message: str) -> None:
+        """Remember that a stage took longer than its timeout (not an error)."""
+        stage = self.stages[index]
+        self.stats[index].slow += 1
+        _LOGGER.info(
+            "TTS stage %s (%s) still generating after %.0f s, starting the next "
+            "stage in parallel (no pause, the first finished audio wins)",
+            index + 1,
+            stage.entity_id,
+            waited,
+        )
+        self.hass.bus.async_fire(
+            EVENT_STAGE_SLOW,
+            {
+                "stage": index + 1,
+                "entity_id": stage.entity_id,
+                "waited": round(waited, 1),
+                "message": message[:255],
+            },
+        )
+        self._async_notify()
+
+    @callback
+    def _async_record_failure(
+        self, index: int, err: BaseException, duration: float, message: str
+    ) -> None:
+        """Remember a failed stage and pause it (cooldown)."""
         stage = self.stages[index]
         stats = self.stats[index]
         quota = is_quota_error(err)
@@ -331,12 +465,13 @@ class FallbackChain:
         stats.cooldown_until = now + cooldown if cooldown > timedelta(0) else None
 
         _LOGGER.warning(
-            "TTS stage %s (%s) failed%s: %s -> trying next stage%s",
+            "TTS stage %s (%s) failed after %.1f s%s: %s%s",
             index + 1,
             stage.entity_id,
+            duration,
             " (quota/rate limit)" if quota else "",
             stats.last_error,
-            f", skipping it for {cooldown}" if stats.cooldown_until else "",
+            f" -> paused for {cooldown}" if stats.cooldown_until else "",
         )
         self.hass.bus.async_fire(
             EVENT_STAGE_FAILED,
@@ -345,9 +480,8 @@ class FallbackChain:
                 "entity_id": stage.entity_id,
                 "error": stats.last_error,
                 "quota_error": quota,
-                "cooldown_until": (
-                    stats.cooldown_until.isoformat() if stats.cooldown_until else None
-                ),
+                "duration": round(duration, 1),
+                "cooldown_until": _iso(stats.cooldown_until),
                 "message": message[:255],
             },
         )
@@ -362,19 +496,21 @@ class FallbackChain:
                 "entity_id": stage.entity_id,
                 "name": self.stage_name(index),
                 "voice": stage.voice,
+                "timeout": self.stage_timeout(index),
                 "successes": stats.successes,
                 "failures": stats.failures,
+                "slow": stats.slow,
+                "last_duration": (
+                    round(stats.last_duration, 1) if stats.last_duration is not None else None
+                ),
+                "average_duration": (
+                    round(avg, 1) if (avg := stats.average_duration) is not None else None
+                ),
                 "in_cooldown": stats.in_cooldown(now),
-                "cooldown_until": (
-                    stats.cooldown_until.isoformat() if stats.cooldown_until else None
-                ),
+                "cooldown_until": _iso(stats.cooldown_until),
                 "last_error": stats.last_error,
-                "last_error_at": (
-                    stats.last_error_at.isoformat() if stats.last_error_at else None
-                ),
-                "last_success_at": (
-                    stats.last_success_at.isoformat() if stats.last_success_at else None
-                ),
+                "last_error_at": _iso(stats.last_error_at),
+                "last_success_at": _iso(stats.last_success_at),
             }
             for index, (stage, stats) in enumerate(zip(self.stages, self.stats, strict=True))
         ]
