@@ -2,7 +2,12 @@
 
 from typing import Any
 
-from homeassistant.components.tts import TextToSpeechEntity, TtsAudioType
+from homeassistant.components.tts import (
+    TextToSpeechEntity,
+    TTSAudioRequest,
+    TTSAudioResponse,
+    TtsAudioType,
+)
 from homeassistant.const import CONF_LANGUAGE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
@@ -65,3 +70,7 @@ class FallbackChainTTSEntity(FallbackChainEntity, TextToSpeechEntity):
     ) -> TtsAudioType:
         """Load TTS audio from the first stage that works."""
         return await self.chain.async_get_tts_audio(message, language)
+
+    async def async_stream_tts_audio(self, request: TTSAudioRequest) -> TTSAudioResponse:
+        """Stream audio from the first stage that works."""
+        return await self.chain.async_stream_tts_audio(request.message_gen, request.language)

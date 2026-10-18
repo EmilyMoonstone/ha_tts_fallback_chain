@@ -19,6 +19,14 @@ springt die Kette automatisch auf den bezahlten Key. Fällt auch der aus,
 
 ## Funktionen
 
+- **Streaming:** Die Kette gibt das Streaming der Stufen weiter. Streamende
+  Dienste (z. B. ElevenLabs, Microsoft/Azure, Home Assistant Cloud) fangen in
+  der Assist-Pipeline schon an zu sprechen, während das LLM noch schreibt. Eine
+  Stufe gilt erst als erfolgreich, wenn ihr erstes Audio da ist. Bis dahin kann
+  die nächste Stufe übernehmen und bekommt den kompletten Text. Bricht eine
+  Stufe ab, nachdem ihr Audio schon läuft, endet die Ansage (kein
+  Stimmenwechsel mitten im Satz). Timeouts zählen ab dem ersten Text, nicht
+  während das LLM noch nachdenkt. Tipp: streamende Stufen nach vorne.
 - **Beliebig viele Stufen** in fester Reihenfolge. Jede TTS-Entität, die in Home
   Assistant eingerichtet ist, kann eine Stufe sein.
 - **Eigene Stimme pro Stufe:** Die Stimme wird als Dropdown mit den Stimmen des

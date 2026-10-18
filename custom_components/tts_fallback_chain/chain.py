@@ -8,20 +8,22 @@ Errors and slow generations are handled differently:
 * A **slow generation** (the stage's timeout elapsed without audio) is not an
   error. The slow stage keeps running, the next stage is started in parallel
   and whichever stage delivers audio first wins. Slow stages are never paused.
+
+Everything is streamed: a stage that streams (e.g. ElevenLabs, Azure) starts
+speaking while the LLM answer still arrives. A stage only counts as working once
+its first audio chunk arrived; until then the next stage gets the whole text.
 """
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import logging
 from time import monotonic
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.components.tts import (
-    async_get_media_source_audio,
-    generate_media_source_id,
-)
+from homeassistant.components.tts import TTSAudioRequest, TTSAudioResponse
+from homeassistant.components.tts.const import DATA_TTS_MANAGER
 from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
@@ -87,6 +89,62 @@ def _error_text(err: BaseException) -> str:
 
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
+
+
+async def _single(message: str) -> AsyncGenerator[str]:
+    """Return a complete message as a text stream."""
+    yield message
+
+
+class _TextBuffer:
+    """Collects the incoming text so that every stage can read all of it.
+
+    The text is read by its own task, so cancelling a stage never cancels the
+    text source (e.g. the LLM answer of an Assist pipeline).
+    """
+
+    def __init__(self, hass: HomeAssistant, source: AsyncGenerator[str]) -> None:
+        self._chunks: list[str] = []
+        self._done = False
+        self._changed = asyncio.Event()
+        self.started = asyncio.Event()
+        self.error: Exception | None = None
+        hass.async_create_background_task(self._async_read(source), "tts_fallback_chain text")
+
+    @property
+    def message(self) -> str:
+        """Return the text received so far."""
+        return "".join(self._chunks)
+
+    async def _async_read(self, source: AsyncGenerator[str]) -> None:
+        try:
+            async for chunk in source:
+                self._chunks.append(chunk)
+                self._notify()
+        except Exception as err:  # noqa: BLE001 - handed on to the stages
+            self.error = err
+        finally:
+            self._done = True
+            self._notify()
+
+    def _notify(self) -> None:
+        self.started.set()
+        self._changed.set()
+        self._changed = asyncio.Event()
+
+    async def reader(self) -> AsyncGenerator[str]:
+        """Yield the whole text from the beginning, waiting for new chunks."""
+        index = 0
+        while True:
+            if index < len(self._chunks):
+                index += 1
+                yield self._chunks[index - 1]
+            elif self.error is not None:
+                raise self.error
+            elif self._done:
+                return
+            else:
+                await self._changed.wait()
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,24 +327,28 @@ class FallbackChain:
     # ------------------------------------------------------------------
     # Core
 
-    async def _async_run_stage(
-        self, stage: Stage, message: str, language: str | None
-    ) -> tuple[str, bytes]:
-        """Generate audio with a single stage. Raises on any failure."""
-        media_source_id = generate_media_source_id(
-            self.hass,
-            message=message,
-            engine=stage.entity_id,
-            language=self._resolve_language(stage, language),
-            options=stage.build_options(),
-            # The result of the chain itself is cached by Home Assistant, no
-            # need to store every stage's audio on disk as well.
-            cache=False,
+    async def _async_open_stream(
+        self, stage: Stage, text: "_TextBuffer", language: str | None
+    ) -> tuple[str, AsyncGenerator[bytes], bytes]:
+        """Start a stage and wait for its first audio chunk. Raises on any failure.
+
+        Streaming engines start speaking while the text still arrives. All other
+        engines get the complete text (Home Assistant's default implementation).
+        """
+        entity = get_tts_entity(self.hass, stage.entity_id)
+        if entity is None:
+            raise HomeAssistantError("Entität nicht gefunden / nicht geladen")
+        stage_language, options = self.hass.data[DATA_TTS_MANAGER].process_options(
+            entity, self._resolve_language(stage, language), stage.build_options()
         )
-        extension, data = await async_get_media_source_audio(self.hass, media_source_id)
-        if not extension or not data:
-            raise HomeAssistantError("Engine returned no audio")
-        return extension, data
+        response = await entity.internal_async_stream_tts_audio(
+            TTSAudioRequest(stage_language, options, text.reader())
+        )
+        try:
+            first = await anext(response.data_gen)
+        except StopAsyncIteration:
+            raise HomeAssistantError("Engine returned no audio") from None
+        return response.extension, response.data_gen, first
 
     def _stage_order(self, errors: list[str]) -> list[int]:
         """Return the stage indexes to try, in order.
@@ -315,13 +377,30 @@ class FallbackChain:
     async def async_get_tts_audio(
         self, message: str, language: str | None
     ) -> tuple[str, bytes]:
-        """Return audio from the first stage that delivers it."""
+        """Return the complete audio of the first stage that delivers it."""
+        response = await self.async_stream_tts_audio(_single(message), language)
+        return response.extension, b"".join([chunk async for chunk in response.data_gen])
+
+    async def async_stream_tts_audio(
+        self, message_gen: AsyncGenerator[str], language: str | None
+    ) -> TTSAudioResponse:
+        """Stream the audio of the first stage that delivers audio.
+
+        A stage counts as working once its first audio chunk arrived. Until then
+        the next stage can take over and gets the whole text again. Once audio
+        flows there is no switching anymore: a different voice in the middle of
+        an answer would be worse than stopping.
+        """
         loop = asyncio.get_running_loop()
+        text = _TextBuffer(self.hass, message_gen)
+        # Timeouts count from the first text, not while an LLM is still thinking.
+        await text.started.wait()
+
         errors: list[str] = []
         order = self._stage_order(errors)
         deadline = loop.time() + self.max_wait
 
-        running: dict[asyncio.Task[tuple[str, bytes]], int] = {}
+        running: dict[asyncio.Task[tuple[str, AsyncGenerator[bytes], bytes]], int] = {}
         started_at: dict[int, float] = {}
         reported_slow: set[int] = set()
         next_pos = 0
@@ -340,14 +419,14 @@ class FallbackChain:
                     and (not current_running or now >= next_start_at)
                 ):
                     if current_running and current is not None:
-                        self._async_record_slow(current, now - started_at[current], message)
+                        self._async_record_slow(current, now - started_at[current], text.message)
                         reported_slow.add(current)
                     current = order[next_pos]
                     next_pos += 1
                     started_at[current] = now
                     next_start_at = now + self.stage_timeout(current)
                     task = self.hass.async_create_task(
-                        self._async_run_stage(self.stages[current], message, language),
+                        self._async_open_stream(self.stages[current], text, language),
                         f"tts_fallback_chain stage {current + 1}",
                     )
                     running[task] = current
@@ -362,7 +441,7 @@ class FallbackChain:
                 if now >= deadline:
                     for index in running.values():
                         if index not in reported_slow:
-                            self._async_record_slow(index, now - started_at[index], message)
+                            self._async_record_slow(index, now - started_at[index], text.message)
                         errors.append(
                             f"{self.stage_name(index)}: keine Antwort nach {self.max_wait:g} s"
                         )
@@ -376,13 +455,20 @@ class FallbackChain:
                     index = running.pop(task)
                     duration = loop.time() - started_at[index]
                     try:
-                        extension, data = task.result()
+                        extension, data_gen, first = task.result()
                     except Exception as err:  # noqa: BLE001 - any failure: next stage
-                        self._async_record_failure(index, err, duration, message)
+                        if text.error is not None:
+                            raise text.error from None  # the text broke, not the stage
+                        self._async_record_failure(index, err, duration, text.message)
                         errors.append(f"{self.stage_name(index)}: {_error_text(err)}")
                         continue
                     self._async_record_success(index, duration)
-                    return extension, data
+                    return TTSAudioResponse(
+                        extension,
+                        self._async_rest_of_stream(
+                            index, first, data_gen, text, started_at[index]
+                        ),
+                    )
         finally:
             for task in running:
                 task.cancel()
@@ -395,10 +481,29 @@ class FallbackChain:
         self.last_error = "; ".join(errors) or "Keine Stufen konfiguriert"
         self.hass.bus.async_fire(
             EVENT_ALL_STAGES_FAILED,
-            {"message": message[:255], "errors": errors},
+            {"message": text.message[:255], "errors": errors},
         )
         self._async_notify()
         raise HomeAssistantError(f"All TTS stages failed: {self.last_error}")
+
+    async def _async_rest_of_stream(
+        self,
+        index: int,
+        first: bytes,
+        data_gen: AsyncGenerator[bytes],
+        text: "_TextBuffer",
+        started_at: float,
+    ) -> AsyncGenerator[bytes]:
+        """Yield the audio of the winning stage and remember if it breaks off."""
+        yield first
+        try:
+            async for chunk in data_gen:
+                yield chunk
+        except Exception as err:
+            if text.error is None:
+                duration = asyncio.get_running_loop().time() - started_at
+                self._async_record_failure(index, err, duration, text.message)
+            raise
 
     # ------------------------------------------------------------------
     # Bookkeeping
