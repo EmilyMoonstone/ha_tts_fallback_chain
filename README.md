@@ -27,6 +27,10 @@ springt die Kette automatisch auf den bezahlten Key. Fällt auch der aus,
   Stufe ab, nachdem ihr Audio schon läuft, endet die Ansage (kein
   Stimmenwechsel mitten im Satz). Timeouts zählen ab dem ersten Text, nicht
   während das LLM noch nachdenkt. Tipp: streamende Stufen nach vorne.
+- **Audio-Tags:** Regieanweisungen wie `[whispers]`, `[laughs softly]` oder
+  `[pause]` gehen nur an ElevenLabs. Alle anderen Stufen bekommen den Text ohne
+  Tags, damit sie nicht vorgelesen werden. Ein LLM darf also Tags setzen,
+  auch wenn die Kette mal auf Azure, Gemini oder HA Cloud ausweicht.
 - **Beliebig viele Stufen** in fester Reihenfolge. Jede TTS-Entität, die in Home
   Assistant eingerichtet ist, kann eine Stufe sein.
 - **Eigene Stimme pro Stufe:** Die Stimme wird als Dropdown mit den Stimmen des
