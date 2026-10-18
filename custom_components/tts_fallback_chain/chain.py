@@ -19,6 +19,7 @@ from collections.abc import AsyncGenerator, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import logging
+import re
 from time import monotonic
 from typing import TYPE_CHECKING, Any
 
@@ -27,9 +28,11 @@ from homeassistant.components.tts.const import DATA_TTS_MANAGER
 from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util, language as language_util
 
 from .const import (
+    AUDIO_TAG_PLATFORMS,
     CONF_ENTITY_ID,
     CONF_ERROR_COOLDOWN,
     CONF_EXTRA_OPTIONS,
@@ -89,6 +92,28 @@ def _error_text(err: BaseException) -> str:
 
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
+
+
+# An audio tag: a short direction in square brackets, e.g. "[whispers]".
+_AUDIO_TAG = re.compile(r"\[[^\[\]\n]{1,40}\]\s*")
+_AUDIO_TAG_MAX_LEN = 42
+
+
+async def strip_audio_tags(text_gen: AsyncGenerator[str]) -> AsyncGenerator[str]:
+    """Remove audio tags from a text stream, also when split across chunks."""
+    pending = ""
+    async for chunk in text_gen:
+        pending = _AUDIO_TAG.sub("", pending + chunk)
+        start = pending.rfind("[")
+        # An open "[" near the end may start a tag: wait for more text.
+        if start != -1 and "]" not in pending[start:] and len(pending) - start < _AUDIO_TAG_MAX_LEN:
+            out, pending = pending[:start], pending[start:]
+        else:
+            out, pending = pending, ""
+        if out:
+            yield out
+    if pending:
+        yield pending
 
 
 async def _single(message: str) -> AsyncGenerator[str]:
@@ -315,6 +340,11 @@ class FallbackChain:
         )
         return matches[0] if matches else None
 
+    def _understands_audio_tags(self, entity_id: str) -> bool:
+        """Return True if the engine of a stage can handle "[whispers]" etc."""
+        entry = er.async_get(self.hass).async_get(entity_id)
+        return entry is not None and entry.platform in AUDIO_TAG_PLATFORMS
+
     def _unavailable_reason(self, stage: Stage) -> str | None:
         """Return why a stage can not be used at all right now, else None."""
         state = self.hass.states.get(stage.entity_id)
@@ -341,8 +371,11 @@ class FallbackChain:
         stage_language, options = self.hass.data[DATA_TTS_MANAGER].process_options(
             entity, self._resolve_language(stage, language), stage.build_options()
         )
+        message_gen = text.reader()
+        if not self._understands_audio_tags(stage.entity_id):
+            message_gen = strip_audio_tags(message_gen)
         response = await entity.internal_async_stream_tts_audio(
-            TTSAudioRequest(stage_language, options, text.reader())
+            TTSAudioRequest(stage_language, options, message_gen)
         )
         try:
             first = await anext(response.data_gen)

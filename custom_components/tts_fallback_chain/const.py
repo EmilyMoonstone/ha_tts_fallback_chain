@@ -37,6 +37,10 @@ QUOTA_ERROR_MARKERS: Final = (
     "too many requests",
 )
 
+# Integrations whose TTS understands audio tags like "[whispers]". All other
+# stages get the text without the tags, so they are not read out loud.
+AUDIO_TAG_PLATFORMS: Final = frozenset({"elevenlabs"})
+
 EVENT_STAGE_FAILED: Final = f"{DOMAIN}_stage_failed"
 EVENT_STAGE_SLOW: Final = f"{DOMAIN}_stage_slow"
 EVENT_ALL_STAGES_FAILED: Final = f"{DOMAIN}_all_stages_failed"

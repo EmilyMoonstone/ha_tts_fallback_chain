@@ -1,6 +1,7 @@
 """Tests for the fallback logic and the entities."""
 
 import asyncio
+from unittest.mock import patch
 from datetime import timedelta
 
 import pytest
@@ -13,6 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
+from custom_components.tts_fallback_chain.chain import strip_audio_tags
 from custom_components.tts_fallback_chain.const import (
     DOMAIN,
     EVENT_STAGE_FAILED,
@@ -346,3 +348,30 @@ async def test_broken_text_does_not_pause_stages(
     with pytest.raises(RuntimeError, match="LLM kaputt"):
         [chunk async for chunk in response.data_gen]
     assert all(stats.cooldown_until is None for stats in entry.runtime_data.stats)
+
+
+async def test_audio_tags_only_for_engines_that_understand_them(
+    hass: HomeAssistant, fake_engines: dict[str, FakeTTS]
+) -> None:
+    await setup_chain(hass)
+    assert await speak(hass, "[warmly] Hallo [short pause] du.") == b"Free:Hallo du."
+
+    with patch(
+        "custom_components.tts_fallback_chain.chain.AUDIO_TAG_PLATFORMS", {"fake_tts"}
+    ):
+        assert await speak(hass, "[warmly] Hallo.") == b"Free:[warmly] Hallo."
+
+
+async def test_strip_audio_tags_split_across_chunks() -> None:
+    async def chunks(*parts: str):
+        for part in parts:
+            yield part
+
+    async def joined(*parts: str) -> str:
+        return "".join([chunk async for chunk in strip_audio_tags(chunks(*parts))])
+
+    assert await joined("Hallo [whi", "spers] du. [la", "ughs]") == "Hallo du. "
+    # A bracket that never closes or is far too long is ordinary text.
+    assert await joined("Preis [", "siehe oben") == "Preis [siehe oben"
+    long_text = "[" + "x" * 50 + "] Ende"
+    assert await joined(long_text) == long_text
