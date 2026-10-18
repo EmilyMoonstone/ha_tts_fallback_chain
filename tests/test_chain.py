@@ -1,5 +1,6 @@
 """Tests for the fallback logic and the entities."""
 
+import asyncio
 from datetime import timedelta
 
 import pytest
@@ -288,3 +289,60 @@ async def test_reset_button(hass: HomeAssistant, fake_engines: dict[str, FakeTTS
 async def test_unload(hass: HomeAssistant, fake_engines) -> None:
     entry = await setup_chain(hass)
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def two_sentences(more_text: asyncio.Event | None = None):
+    yield "Hallo. "
+    if more_text is not None:
+        await more_text.wait()
+    yield "Wie geht's?"
+
+
+async def test_streaming_stage_speaks_before_text_is_complete(
+    hass: HomeAssistant, fake_engines: dict[str, FakeTTS]
+) -> None:
+    entry = await setup_chain(
+        hass, stages=[{"entity_id": "tts.stream"}, {"entity_id": "tts.cloud"}]
+    )
+    more_text = asyncio.Event()
+    response = await entry.runtime_data.async_stream_tts_audio(two_sentences(more_text), "de")
+    # Audio of the first sentence arrives while the LLM is still writing.
+    assert await anext(response.data_gen) == b"Stream:Hallo. "
+    more_text.set()
+    assert [chunk async for chunk in response.data_gen] == [b"Stream:Wie geht's?"]
+    assert not fake_engines["cloud"].calls
+
+    # Home Assistant itself streams through the chain as well.
+    assert await speak(hass, "Hallo") == b"Stream:Hallo"
+
+
+async def test_streaming_error_before_audio_replays_text_to_next_stage(
+    hass: HomeAssistant, fake_engines: dict[str, FakeTTS]
+) -> None:
+    entry = await setup_chain(
+        hass, stages=[{"entity_id": "tts.stream"}, {"entity_id": "tts.cloud"}]
+    )
+    fake_engines["stream"].error = HomeAssistantError(
+        "status_code: 401, body: {'detail': {'status': 'quota_exceeded'}}"
+    )
+    response = await entry.runtime_data.async_stream_tts_audio(two_sentences(), "de")
+    assert [chunk async for chunk in response.data_gen] == [b"Cloud:Hallo. Wie geht's?"]
+    remaining = entry.runtime_data.stats[0].cooldown_until - dt_util.utcnow()
+    assert remaining > timedelta(minutes=59)  # ElevenLabs quota -> quota cooldown
+
+
+async def test_broken_text_does_not_pause_stages(
+    hass: HomeAssistant, fake_engines: dict[str, FakeTTS]
+) -> None:
+    entry = await setup_chain(
+        hass, stages=[{"entity_id": "tts.stream"}, {"entity_id": "tts.cloud"}]
+    )
+
+    async def broken_llm():
+        yield "Hallo"
+        raise RuntimeError("LLM kaputt")
+
+    response = await entry.runtime_data.async_stream_tts_audio(broken_llm(), "de")
+    with pytest.raises(RuntimeError, match="LLM kaputt"):
+        [chunk async for chunk in response.data_gen]
+    assert all(stats.cooldown_until is None for stats in entry.runtime_data.stats)

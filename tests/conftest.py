@@ -6,7 +6,13 @@ from unittest.mock import patch
 
 import pytest
 
-from homeassistant.components.tts import TextToSpeechEntity, TtsAudioType, Voice
+from homeassistant.components.tts import (
+    TextToSpeechEntity,
+    TTSAudioRequest,
+    TTSAudioResponse,
+    TtsAudioType,
+    Voice,
+)
 from homeassistant.config_entries import ConfigEntry, ConfigFlow
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -78,6 +84,20 @@ class FakeTTS(TextToSpeechEntity):
         return "mp3", f"{self.name}:{message}".encode()
 
 
+class FakeStreamTTS(FakeTTS):
+    """A TTS engine that answers every text chunk with an audio chunk."""
+
+    async def async_stream_tts_audio(self, request: TTSAudioRequest) -> TTSAudioResponse:
+        async def data_gen() -> AsyncGenerator[bytes]:
+            async for chunk in request.message_gen:
+                self.calls.append({"message": chunk, "options": request.options})
+                if self.error is not None:
+                    raise self.error
+                yield f"{self.name}:{chunk}".encode()
+
+        return TTSAudioResponse("mp3", data_gen())
+
+
 class FakeFlow(ConfigFlow):
     """Config flow of the fake integration."""
 
@@ -99,6 +119,7 @@ async def fake_engines(hass: HomeAssistant) -> AsyncGenerator[dict[str, FakeTTS]
             default_language="en-US",
         ),
         "novoice": FakeTTS("NoVoice", options=[]),
+        "stream": FakeStreamTTS("Stream"),
     }
 
     async def async_setup_entry_platform(
